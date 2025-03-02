@@ -114,7 +114,7 @@ def publish_message(client, topic, message, qos=0, retain=False):
     else:
         print(f"Failed to send message to topic {topic}")
 
-client = mqtt.Client()  # You can provide a client ID here if needed
+client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1,"crestron2ha")  # You can provide a client ID here if needed
 client.on_connect = on_connect
 client.on_message = on_message
 client.on_disconnect = on_disconnect  # Optional
