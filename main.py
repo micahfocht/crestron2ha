@@ -96,7 +96,15 @@ def publish_discovery(client,output):
         "options": getInputs(),
         "availability_topic": "crestroncontrol/availability",
         "payload_available": "online",
-        "payload_not_available": "offline"
+        "payload_not_available": "offline",
+        "device": {
+            "manufacturer": "Crestron",
+            "model": "8x8 Matrix Switcher",
+            "name": "Crestron Switcher",
+            "identifiers": ["crestronmd8x8"],
+            "sw_version": "1.0.0",
+            "hw_version": "Rev A"
+        },
     }
     #
     publish_message(client,f"homeassistant/select/crestroncontrol/{name.replace(' ','_')}_Input/config", json.dumps(discovery_payload),retain=True)
