@@ -2,10 +2,10 @@ import telnetlib
 import time
 import paho.mqtt.client as mqtt
 import json
-
+import crestron_parser
 switcherIP = "192.168.1.198"
-inputs = [["Bedroom Apple TV","1"],["Blu Ray Player","2"],["Input 3","3"],["Input 4","4"],["Input 5","5"],["Input 6","6"],["Input 7","7"],["No Input","0"]]
-outputs = [["Bedroom TV","17","No Input"],["Basement TV","18","No Input"],["Output 3","19","No Input"],["Output 4","20","No Input"],["Office Monitor","21","No Input"],["Output 6","22","No Input"],["Servers","23","No Input"],["Output 8","24","No Input"]]
+inputs,outputs = [],[]
+
 broker_address = "192.168.1.5"  # Replace with your broker's address
 port = 1883  # Default MQTT port
 
@@ -138,6 +138,11 @@ try:
     tn.write(b"/r/n")
     tn.read_until(b"DM-MD8x8>",timeout=2)
     tn.write(b"/r/n")
+    tn.read_until(b"DM-MD8x8>",timeout=2)
+    tn.write(b"cards -force")
+    test = tn.read_until(b"DM-MD8x8>",timeout=2)
+    cards = crestron_parser.parse_cards(crestron_parser.cardpayload)
+    inputs,outputs = crestron_parser.parseIO(cards,crestron_parser.namespayload)
     client.loop_start()  # Non -Blocking loop
     while(True):
         publish_message(client,"crestroncontrol/availability","online")
