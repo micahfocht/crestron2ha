@@ -160,10 +160,8 @@ client.username_pw_set("python-exlink", "nqpkMctoRefF")
 
 
 try:
-
-
-    tn = telnetlib.Telnet(switcher, 41795)
     client.connect(broker, broker_port, 60)  # 60 seconds keepalive
+    tn = telnetlib.Telnet(switcher, 41795)
     tn.read_until(b"DM-MD8x8>",timeout=2)
     tn.write(b"\r\n")
     tn.read_until(b"DM-MD8x8>",timeout=2)
