@@ -3,19 +3,33 @@ import time
 import paho.mqtt.client as mqtt
 import json
 import crestron_parser
-switcherIP = "192.168.1.198"
+import os
+
+# Crestron 8x8 Matrix Switcher to Home Assistant MQTT Bridge
+# This script connects to a Crestron 8x8 Matrix Switcher via Telnet and publishes its state to Home Assistant via MQTT.
+# It also listens for commands from Home Assistant to change the input/output routing of the switcher.
 inputs,outputs = [],[]
 
-broker_address = "192.168.1.5"  # Replace with your broker's address
-port = 1883  # Default MQTT port
+PATH = '/config/'
+if not os.path.exists('/.dockerenv'):
+    from dotenv import load_dotenv
+    load_dotenv()
+    PATH = 'config/'
+
+switcher = os.environ.get('SWITCHER_IP', 'localhost')
+broker = os.environ.get('MQTT_BROKER', 'localhost')
+broker_port = int(os.environ.get('BROKER_PORT', 1883))  # Default MQTT port is 1883
 
 #Crestron Control Stuff
 def getInput(name):
     for x in inputs:
         if x[0] == name:
             return x[1]
-        if x[1] == name:
-            return x[0]
+        try:
+            if int(x[1]) == int(name):
+                return x[0]
+        except:
+            pass
     return "0"
 def getInputs():
     inputNames = []
@@ -39,15 +53,27 @@ def buildCommand(input,output,audio=True,video=True):
         cmd = f"SETAVROUTE {input} {output}\r\n"
         return cmd.encode()
     if audio:
-        cmd = f"SETAUDIOVROUTE {input} {output}\r\n"
+        cmd = f"SETAUDIOROUTE {input} {output}\r\n"
         return cmd.encode()
     if video:
         cmd = f"SETVIDEOROUTE {input} {output}\r\n"
         return cmd.encode()
 def sendCommand(input,output,audio=True,video=True):
     cmd = buildCommand(getInput(input),getOutput(output)[1],audio,video)
-    tn.write(cmd)
+    tn = telnetlib.Telnet(switcher, 41795)
     tn.read_until(b"DM-MD8x8>",timeout=2)
+    tn.write(b"\r\n")
+    tn.read_until(b"DM-MD8x8>",timeout=2)
+    tn.write(b"\r\n")
+    tn.read_until(b"DM-MD8x8>",timeout=2)
+    tn.write(b"\r\n")
+    tn.read_until(b"DM-MD8x8>",timeout=2)
+    tn.write(cmd)
+    out = tn.read_until(b"DM-MD8x8>",timeout=2)
+    tn.write(b"\r\n")
+    out = tn.read_until(b"DM-MD8x8>",timeout=2)
+    tn.write(b"BYE\r\n")
+    tn.close()
 #MQTT Stuff
 def on_connect(client, userdata, flags, rc):
     if rc == 0:
@@ -72,7 +98,7 @@ def on_message(client, userdata, msg):
     sendCommand(payload,name.replace('_',' '))
     output = getOutput(name.replace('_',' '))
     newoutput = output
-    newoutput[2] = payload
+    newoutput[2] = getInput(payload)
     outputs.append(newoutput)
     outputs.remove(output)
     publish_state(newoutput)
@@ -82,7 +108,9 @@ def on_disconnect(client, userdata, rc):
     print("Disconnected from MQTT Broker")
 
 def publish_state(output):
-    publish_message(client,f"crestroncontrol/state/{output[0].replace(' ','_')}", output[2],retain=True)
+    input = getInput(output[2])
+    publish_message(client,f"crestroncontrol/state/{output[0].replace(' ','_')}", input,retain=True)
+    pass
     
 
 # Publish MQTT Discovery Message
@@ -130,27 +158,32 @@ client.username_pw_set("python-exlink", "nqpkMctoRefF")
 
 
 try:
-    tn = telnetlib.Telnet(switcherIP, 41795)
-    client.connect(broker_address, port, 60)  # 60 seconds keepalive
+
+
+    tn = telnetlib.Telnet(switcher, 41795)
+    client.connect(broker, broker_port, 60)  # 60 seconds keepalive
     tn.read_until(b"DM-MD8x8>",timeout=2)
     tn.write(b"\r\n")
     tn.read_until(b"DM-MD8x8>",timeout=2)
     tn.write(b"\r\n")
     tn.read_until(b"DM-MD8x8>",timeout=2)
-    tn.write(b"\r\n")
+    tn.write(b"joinmonitorslot stop all\r\n")
     tn.read_until(b"DM-MD8x8>",timeout=2)
-    tn.write(b"cards -force\r\n")
+    tn.write(b"cards\r\n")
     raw_cards = tn.read_until(b"DM-MD8x8>",timeout=2)
     raw_cards += tn.read_until(b"  36: DMC-FPANEL Front Panel [v2.002.0026]",timeout=10)
     cards = crestron_parser.parse_cards(raw_cards)
     tn.write(b"joingetoutserial 0x04 33 0 1 2 3 4 5 6 7 32 33 34 35 36 37 38 39 245\r\n")
     raw_io = tn.read_until(b"joingetoutserial 0x04 33 0 1 2 3 4 5 6 7 32 33 34 35 36 37 38 39 245",timeout=2)
     raw_io = tn.read_until(b"0E2E050004F5003030303030303030",timeout=2)
+    tn.write(b"BYE\r\n")
+    tn.close()
     inputs,outputs = crestron_parser.parseIO(cards,raw_io)
+    #crestron_parser.createMonitors(outputs,tn)
     client.loop_start()  # Non -Blocking loop
     while(True):
         publish_message(client,"crestroncontrol/availability","online")
-        time.sleep(5)
+        time.sleep(10)
 finally:
     time.sleep(1)
     publish_message(client,"crestroncontrol/availability","offline")
