@@ -17,8 +17,10 @@ if not os.path.exists('/.dockerenv'):
     PATH = 'config/'
 
 switcher = os.environ.get('SWITCHER_IP', 'localhost')
+print("Connecting to Crestron Switcher at:", switcher)
 broker = os.environ.get('MQTT_BROKER', 'localhost')
 broker_port = int(os.environ.get('BROKER_PORT', 1883))  # Default MQTT port is 1883
+print("Connecting to MQTT Broker at:", broker," port:", broker_port)
 
 #Crestron Control Stuff
 def getInput(name):
