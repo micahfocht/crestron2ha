@@ -191,5 +191,3 @@ finally:
     publish_message(client,"crestroncontrol/availability","offline")
     client.disconnect()
     client.loop_stop()
-    tn.write(b"BYE\r\n")
-    tn.close()
