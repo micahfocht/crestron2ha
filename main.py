@@ -77,8 +77,8 @@ def sendCommand(input,output,audio=True,video=True):
     tn.write(b"BYE\r\n")
     tn.close()
 #MQTT Stuff
-def on_connect(client, userdata, flags, rc):
-    if rc == 0:
+def on_connect(client, userdata, flags, reason_code, properties):
+    if reason_code == 0:
         print("Connected to MQTT Broker!")
         # Subscribe to a topic here after successful connection
         client.subscribe("crestroncontrol/cmd")  # Replace with your topic
@@ -88,7 +88,7 @@ def on_connect(client, userdata, flags, rc):
         for x in outputs:
             publish_discovery(client,x)
     else:
-        print(f"Failed to connect, return code {rc}")
+        print(f"Failed to connect, return code {reason_code}")
 
 def on_message(client, userdata, msg):
     publish_message(client,"crestroncontrol/availability","online")
@@ -106,7 +106,7 @@ def on_message(client, userdata, msg):
     publish_state(newoutput)
 
     
-def on_disconnect(client, userdata, rc):
+def on_disconnect(client, userdata, flags, reason_code, properties):
     print("Disconnected from MQTT Broker")
 
 def publish_state(output):
@@ -152,7 +152,7 @@ def publish_message(client, topic, message, qos=0, retain=False):
     else:
         print(f"Failed to send message to topic {topic}")
 
-client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1,"crestron2ha")  # You can provide a client ID here if needed
+client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2,"crestron2ha")  # You can provide a client ID here if needed
 client.on_connect = on_connect
 client.on_message = on_message
 client.on_disconnect = on_disconnect  # Optional
