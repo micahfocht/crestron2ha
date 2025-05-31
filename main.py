@@ -1,4 +1,4 @@
-import telnetlib
+from Exscript.protocols import telnetlib
 import time
 import paho.mqtt.client as mqtt
 import json
@@ -63,17 +63,12 @@ def buildCommand(input,output,audio=True,video=True):
 def sendCommand(input,output,audio=True,video=True):
     cmd = buildCommand(getInput(input),getOutput(output)[1],audio,video)
     tn = telnetlib.Telnet(switcher, 41795)
-    tn.read_until(b"DM-MD8x8>",timeout=2)
     tn.write(b"\r\n")
-    tn.read_until(b"DM-MD8x8>",timeout=2)
     tn.write(b"\r\n")
-    tn.read_until(b"DM-MD8x8>",timeout=2)
     tn.write(b"\r\n")
-    tn.read_until(b"DM-MD8x8>",timeout=2)
+    print(cmd)
     tn.write(cmd)
-    out = tn.read_until(b"DM-MD8x8>",timeout=2)
     tn.write(b"\r\n")
-    out = tn.read_until(b"DM-MD8x8>",timeout=2)
     tn.write(b"BYE\r\n")
     tn.close()
 #MQTT Stuff
@@ -162,20 +157,19 @@ client.username_pw_set("python-exlink", "nqpkMctoRefF")
 try:
     client.connect(broker, broker_port, 60)  # 60 seconds keepalive
     tn = telnetlib.Telnet(switcher, 41795)
-    tn.read_until(b"DM-MD8x8>",timeout=2)
+    tn.read_until(b"DM-MD8x8>",timeout=1)
     tn.write(b"\r\n")
-    tn.read_until(b"DM-MD8x8>",timeout=2)
+    tn.read_until(b"DM-MD8x8>",timeout=1)
     tn.write(b"\r\n")
-    tn.read_until(b"DM-MD8x8>",timeout=2)
+    tn.read_until(b"DM-MD8x8>",timeout=1)
     tn.write(b"joinmonitorslot stop all\r\n")
-    tn.read_until(b"DM-MD8x8>",timeout=2)
+    tn.read_until(b"DM-MD8x8>",timeout=1)
     tn.write(b"cards\r\n")
-    raw_cards = tn.read_until(b"DM-MD8x8>",timeout=2)
-    raw_cards += tn.read_until(b"  36: DMC-FPANEL Front Panel [v2.002.0026]",timeout=10)
+    raw_cards = tn.read_until(b"DM-MD8x8>",timeout=1)
+    raw_cards += tn.read_until(b"  36: DMC-FPANEL Front Panel [v2.002.0026]",timeout=2)
     cards = crestron_parser.parse_cards(raw_cards)
     tn.write(b"joingetoutserial 0x04 33 0 1 2 3 4 5 6 7 32 33 34 35 36 37 38 39 245\r\n")
     raw_io = tn.read_until(b"joingetoutserial 0x04 33 0 1 2 3 4 5 6 7 32 33 34 35 36 37 38 39 245",timeout=2)
-    raw_io = tn.read_until(b"0E2E050004F5003030303030303030",timeout=2)
     tn.write(b"BYE\r\n")
     tn.close()
     inputs,outputs = crestron_parser.parseIO(cards,raw_io)

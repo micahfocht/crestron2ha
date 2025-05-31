@@ -1,7 +1,7 @@
 def parse_cards(payload):
     try:
         cards = []
-        payload = payload.decode().replace("cards\r\n\r\n","")
+        payload = payload.replace("cards\r\n\r\n","")
         for x in payload.split("\r\n"):
             x = x.lstrip()
             x = x.split(":")
@@ -18,13 +18,13 @@ def parse_cards(payload):
 def parseIO(cards,payload):
     inputs = []
     outputs = []
-    payload = payload.replace(b'\xfa',b'.')
-    payload = payload.replace(b'\xfb',b'.')
-    payload = payload.replace(b'\xd0',b'.')
-    payload = payload.replace(b'\xc0',b'.')
-    payload = payload.replace(b'DM-MD8x8>',b'')
-    payload = payload.replace(b'\r\n',b'')
-    payload = payload.decode()
+    payload = payload.replace('\xfa','.')
+    payload = payload.replace('\xfb','.')
+    payload = payload.replace('\xd0','.')
+    payload = payload.replace('\xc0','.')
+    payload = payload.replace('DM-MD8x8>','')
+    payload = payload.replace('\r\n','')
+    payload = payload.replace('joingetoutserial 0x04 33 0 1 2 3 4 5 6 7 32 33 34 35 36 37 38 39 245..','')
     for x in payload.split("..."):
         x = x.replace(".","")
         split = [x[i:i+2] for i in range(0, len(x), 2)]
