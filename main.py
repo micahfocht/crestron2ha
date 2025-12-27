@@ -92,7 +92,16 @@ def on_message(client, userdata, msg):
     print(f"Received `{payload}` from `{topic}` topic")
 
     name = topic.replace('crestroncontrol/cmd/','')
-    sendCommand(payload,name.replace('_',' '))
+    try:
+        sendCommand(payload,name.replace('_',' '))
+    except Exception as e:
+        while e != None:
+            print(e)
+            try:
+                sendCommand(payload,name.replace('_',' '))
+                e = None
+            except:
+                print(e)
     output = getOutput(name.replace('_',' '))
     newoutput = output
     newoutput[2] = getInput(payload)
