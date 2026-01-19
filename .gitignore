@@ -136,6 +136,9 @@ ENV/
 env.bak/
 venv.bak/
 
+# Configuration with secrets (keep example)
+config/av_routing.json
+
 # Spyder project settings
 .spyderproject
 .spyproject
