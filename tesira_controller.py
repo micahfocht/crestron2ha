@@ -181,7 +181,10 @@ class TesiraConnection:
     
     def send_commands_batch(self, commands: list[str]) -> bool:
         """
-        Send multiple TTP commands in quick succession.
+        Send multiple TTP commands in a single write for synchronized execution.
+        
+        Concatenates all commands into one buffer and sends in a single
+        socket write to minimize timing differences between commands.
         
         Args:
             commands: List of TTP command strings
@@ -189,21 +192,25 @@ class TesiraConnection:
         Returns:
             True if all commands sent successfully
         """
+        if not commands:
+            return True
+            
         if not self.is_connected():
             if not self.connect():
                 return False
         
         try:
-            # Send all commands without waiting for individual responses
-            for command in commands:
-                cmd = f"{command}\n"
-                self._channel.send(cmd.encode())  # type: ignore
+            # Concatenate all commands into a single buffer
+            # This sends them in one TCP packet for synchronized execution
+            batch = "\n".join(commands) + "\n"
+            self._channel.sendall(batch.encode())  # type: ignore
             
             # Small delay then drain any responses
-            time.sleep(COMMAND_DELAY * 2)
+            time.sleep(COMMAND_DELAY)
             while self._channel.recv_ready():  # type: ignore
                 self._channel.recv(4096)  # type: ignore
             
+            logger.debug(f"Sent {len(commands)} commands in single batch")
             return True
         except Exception as e:
             logger.error(f"Error sending batch commands to Tesira: {e}")
