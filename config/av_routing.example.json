@@ -1,0 +1,118 @@
+{
+  "mqtt": {
+    "broker": "192.168.1.10",
+    "port": 1883,
+    "username": "homeassistant",
+    "password": "your_mqtt_password"
+  },
+  "crestron": {
+    "host": "192.168.1.100",
+    "port": 41795
+  },
+  "tesira_units": [
+    {
+      "id": "tesira_main",
+      "host": "192.168.1.50",
+      "ssh_username": "default",
+      "ssh_password": "default",
+      "matrix_instance_tag": "MatrixMixer1"
+    },
+    {
+      "id": "tesira_zone2",
+      "host": "192.168.1.51",
+      "ssh_username": "default",
+      "ssh_password": "default",
+      "matrix_instance_tag": "MatrixMixer1"
+    }
+  ],
+  "inputs": [
+    {
+      "name": "Apple TV",
+      "crestron_id": 1,
+      "audio": {
+        "tesira_unit": "tesira_main",
+        "channels": [1, 2],
+        "channel_labels": ["L", "R"]
+      }
+    },
+    {
+      "name": "Blu-ray Player",
+      "crestron_id": 2,
+      "audio": {
+        "tesira_unit": "tesira_main",
+        "channels": [3, 4, 5, 6, 7, 8],
+        "channel_labels": ["FL", "FR", "C", "Sub", "SL", "SR"]
+      }
+    },
+    {
+      "name": "Cable Box",
+      "crestron_id": 3,
+      "audio": {
+        "tesira_unit": "tesira_main",
+        "channels": [9, 10],
+        "channel_labels": ["L", "R"]
+      }
+    },
+    {
+      "name": "Gaming PC",
+      "crestron_id": 4,
+      "audio": {
+        "tesira_unit": "tesira_main",
+        "channels": [11, 12, 13, 14, 15, 16],
+        "channel_labels": ["FL", "FR", "C", "Sub", "SL", "SR"]
+      }
+    },
+    {
+      "name": "Background Music",
+      "crestron_id": null,
+      "audio": {
+        "tesira_unit": "tesira_main",
+        "channels": [17, 18],
+        "channel_labels": ["L", "R"]
+      }
+    }
+  ],
+  "outputs": [
+    {
+      "name": "Living Room",
+      "crestron_id": 1,
+      "audio": {
+        "tesira_unit": "tesira_main",
+        "channels": [1, 2, 3, 4, 5, 6],
+        "channel_labels": ["FL", "FR", "C", "Sub", "SL", "SR"]
+      }
+    },
+    {
+      "name": "Master Bedroom",
+      "crestron_id": 2,
+      "audio": {
+        "tesira_unit": "tesira_main",
+        "channels": [7, 8],
+        "channel_labels": ["L", "R"]
+      }
+    },
+    {
+      "name": "Kitchen",
+      "crestron_id": 3,
+      "audio": null
+    },
+    {
+      "name": "Patio Speakers",
+      "crestron_id": null,
+      "audio": {
+        "tesira_unit": "tesira_zone2",
+        "channels": [1, 2],
+        "channel_labels": ["L", "R"]
+      }
+    },
+    {
+      "name": "Pool Area",
+      "crestron_id": null,
+      "audio": {
+        "tesira_unit": "tesira_zone2",
+        "channels": [3, 4],
+        "channel_labels": ["L", "R"]
+      }
+    }
+  ]
+}
