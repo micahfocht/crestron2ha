@@ -37,6 +37,11 @@ MIN_LEVEL_DB = -100.0
 STEREO_TO_CENTER_OFFSET = -15.0  # L+R mixed to Center
 STEREO_TO_SURROUND_OFFSET = -20.0  # L/R to SL/SR
 
+# Surround to stereo downmix levels (in dB, relative to main level)
+SURROUND_CENTER_TO_STEREO_OFFSET = -3.0  # Center mixed to L+R
+SURROUND_REAR_TO_STEREO_OFFSET = -6.0  # SL/SR mixed to L/R
+SURROUND_SUB_TO_STEREO_OFFSET = -10.0  # Sub mixed to L+R (optional)
+
 
 @dataclass
 class CrosspointState:
@@ -450,10 +455,17 @@ class TesiraController:
         Build a list of (input_channel, output_channel, level_db) tuples for routing.
         
         Uses channel labels for intelligent mapping when available.
-        For stereo to surround, creates appropriate downmix with level offsets:
+        
+        For stereo to surround upmix, creates appropriate mapping with level offsets:
         - L -> FL, R -> FR at base level
         - L+R -> C at base level - 15dB
         - L -> SL, R -> SR at base level - 20dB
+        
+        For surround to stereo downmix, creates appropriate mapping with level offsets:
+        - FL -> L, FR -> R at base level
+        - C -> L+R at base level - 3dB
+        - SL -> L, SR -> R at base level - 6dB
+        - Sub -> L+R at base level - 10dB (optional)
         
         Returns:
             List of (input_ch, output_ch, level_db) tuples
@@ -470,10 +482,56 @@ class TesiraController:
             # Check if input is stereo (L/R only)
             is_stereo_input = set(input_audio.channel_labels) == {"L", "R"}
             
+            # Check if input is surround (has FL, FR and at least one of C, SL, SR)
+            input_label_set = set(input_audio.channel_labels)
+            is_surround_input = (
+                {"FL", "FR"}.issubset(input_label_set) and
+                bool(input_label_set & {"C", "SL", "SR"})
+            )
+            
+            # Check if output is stereo
+            is_stereo_output = set(output_audio.channel_labels) == {"L", "R"}
+            
             for out_ch, out_label in zip(output_audio.channels, output_audio.channel_labels):
                 # Try exact match first
                 if out_label in input_label_to_ch:
                     channel_map.append((input_label_to_ch[out_label], out_ch, base_level_db))
+                # Handle surround to stereo downmix
+                elif is_surround_input and is_stereo_output:
+                    if out_label == "L":
+                        # FL -> L at base level
+                        if "FL" in input_label_to_ch:
+                            channel_map.append((input_label_to_ch["FL"], out_ch, base_level_db))
+                        # C -> L at reduced level
+                        if "C" in input_label_to_ch:
+                            center_level = base_level_db + SURROUND_CENTER_TO_STEREO_OFFSET
+                            channel_map.append((input_label_to_ch["C"], out_ch, center_level))
+                        # SL -> L at reduced level
+                        if "SL" in input_label_to_ch:
+                            rear_level = base_level_db + SURROUND_REAR_TO_STEREO_OFFSET
+                            channel_map.append((input_label_to_ch["SL"], out_ch, rear_level))
+                        # Sub -> L at reduced level (optional)
+                        if "Sub" in input_label_to_ch:
+                            sub_level = base_level_db + SURROUND_SUB_TO_STEREO_OFFSET
+                            channel_map.append((input_label_to_ch["Sub"], out_ch, sub_level))
+                    elif out_label == "R":
+                        # FR -> R at base level
+                        if "FR" in input_label_to_ch:
+                            channel_map.append((input_label_to_ch["FR"], out_ch, base_level_db))
+                        # C -> R at reduced level
+                        if "C" in input_label_to_ch:
+                            center_level = base_level_db + SURROUND_CENTER_TO_STEREO_OFFSET
+                            channel_map.append((input_label_to_ch["C"], out_ch, center_level))
+                        # SR -> R at reduced level
+                        if "SR" in input_label_to_ch:
+                            rear_level = base_level_db + SURROUND_REAR_TO_STEREO_OFFSET
+                            channel_map.append((input_label_to_ch["SR"], out_ch, rear_level))
+                        # Sub -> R at reduced level (optional)
+                        if "Sub" in input_label_to_ch:
+                            sub_level = base_level_db + SURROUND_SUB_TO_STEREO_OFFSET
+                            channel_map.append((input_label_to_ch["Sub"], out_ch, sub_level))
+                    else:
+                        logger.debug(f"No surround-to-stereo mapping for output label '{out_label}'")
                 # Handle stereo to surround mapping
                 elif is_stereo_input:
                     if out_label == "FL" and "L" in input_label_to_ch:
