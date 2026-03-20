@@ -206,6 +206,27 @@ def send_tesira_routing(
     )
 
 
+def send_tesira_logic_state(output_config: OutputConfig, state: bool) -> bool:
+    """
+    Set the Tesira logic state for an output's amplifier.
+    
+    Args:
+        output_config: Output configuration with optional logic_state mapping
+        state: True to turn amplifier on, False to turn off
+        
+    Returns:
+        True if successful or not applicable, False on error
+    """
+    if tesira is None:
+        logger.debug("Tesira controller not available")
+        return True
+    
+    if output_config.logic_state is None:
+        return True
+    
+    return tesira.set_logic_state_from_mapping(output_config.logic_state, state)
+
+
 def route_source(input_name: str, output_name: str) -> bool:
     """
     Route a source to an output (video + audio).
@@ -256,8 +277,16 @@ def route_source(input_name: str, output_name: str) -> bool:
     # Route audio via Tesira (if applicable)
     tesira_success = send_tesira_routing(input_config, output_config, previous_input_config)
     
+    # Set amplifier logic state (on when audio input is active, off for "No Input")
+    has_audio_input = (
+        input_config is not None and
+        input_config.name != "No Input" and
+        input_config.audio is not None
+    )
+    logic_state_success = send_tesira_logic_state(output_config, has_audio_input)
+    
     # Update output state
-    if crestron_success and tesira_success:
+    if crestron_success and tesira_success and logic_state_success:
         output_config.current_input = input_name
         return True
     
@@ -359,6 +388,19 @@ def on_message(mqtt_client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -
                 logger.error(f"Failed to set volume for {output_name}")
         except ValueError:
             logger.error(f"Invalid volume value: {payload}")
+    
+    # Handle amplifier logic state commands
+    elif topic.startswith('crestroncontrol/amp/'):
+        output_name = topic.replace('crestroncontrol/amp/', '').replace('_', ' ')
+        output = config.get_output_by_name(output_name) if config else None
+        if output and output.logic_state is not None:
+            state = payload.upper() == "ON"
+            if send_tesira_logic_state(output, state):
+                publish_amp_state(mqtt_client, output_name, state)
+            else:
+                logger.error(f"Failed to set amplifier state for {output_name}")
+        else:
+            logger.error(f"No logic state configured for output '{output_name}'")
 
 
 def on_disconnect(mqtt_client: mqtt.Client, userdata: Any, flags: Any, reason_code: Any, properties: Any) -> None:
@@ -375,12 +417,30 @@ def publish_state(mqtt_client: mqtt.Client, output: OutputConfig) -> None:
     topic = f"crestroncontrol/state/{output.name.replace(' ', '_')}"
     state = output.current_input or "No Input"
     publish_message(mqtt_client, topic, state, retain=True)
+    
+    # Publish amplifier state if logic state is configured
+    if output.logic_state is not None:
+        has_audio_input = (
+            output.current_input is not None and
+            output.current_input != "No Input"
+        )
+        # Check if the current input actually has audio
+        if has_audio_input and config is not None:
+            input_config = config.get_input_by_name(output.current_input)
+            has_audio_input = input_config is not None and input_config.audio is not None
+        publish_amp_state(mqtt_client, output.name, has_audio_input)
 
 
 def publish_volume_state(mqtt_client: mqtt.Client, output_name: str, volume_db: float) -> None:
     """Publish the current volume state of an output."""
     topic = f"crestroncontrol/volume_state/{output_name.replace(' ', '_')}"
     publish_message(mqtt_client, topic, str(volume_db), retain=True)
+
+
+def publish_amp_state(mqtt_client: mqtt.Client, output_name: str, state: bool) -> None:
+    """Publish the current amplifier logic state of an output."""
+    topic = f"crestroncontrol/amp_state/{output_name.replace(' ', '_')}"
+    publish_message(mqtt_client, topic, "ON" if state else "OFF", retain=True)
 
 
 def publish_discovery(mqtt_client: mqtt.Client, output: OutputConfig) -> None:
@@ -443,6 +503,32 @@ def publish_discovery(mqtt_client: mqtt.Client, output: OutputConfig) -> None:
         publish_message(mqtt_client, volume_discovery_topic, json.dumps(volume_payload), retain=True)
         mqtt_client.subscribe(f"crestroncontrol/volume/{name_safe}")
         publish_volume_state(mqtt_client, name, output.volume_db)
+    
+    # Amplifier logic state entity (if output has logic state configured)
+    if output.logic_state is not None:
+        amp_payload = {
+            "name": f"{name} Amplifier",
+            "unique_id": f"AVControl_{name_safe}_Amplifier",
+            "command_topic": f"crestroncontrol/amp/{name_safe}",
+            "state_topic": f"crestroncontrol/amp_state/{name_safe}",
+            "payload_on": "ON",
+            "payload_off": "OFF",
+            "availability_topic": "crestroncontrol/availability",
+            "payload_available": "online",
+            "payload_not_available": "offline",
+            "device": {
+                "manufacturer": "Crestron/Biamp",
+                "model": "AV Matrix System",
+                "name": "AV Control",
+                "identifiers": ["av_control_system"]
+            },
+        }
+        
+        amp_discovery_topic = f"homeassistant/switch/crestroncontrol/{name_safe}_Amplifier/config"
+        publish_message(mqtt_client, amp_discovery_topic, json.dumps(amp_payload), retain=True)
+        mqtt_client.subscribe(f"crestroncontrol/amp/{name_safe}")
+        # Publish initial state as OFF
+        publish_amp_state(mqtt_client, name, False)
     
     logger.info(f"Published MQTT Discovery for {name}")
     publish_state(mqtt_client, output)
