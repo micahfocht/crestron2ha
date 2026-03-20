@@ -390,8 +390,6 @@ def on_message(mqtt_client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -
                 logger.error(f"Failed to set volume for {output_name}")
         except ValueError:
             logger.error(f"Invalid volume value: {payload}")
-    
-
 
 
 def on_disconnect(mqtt_client: mqtt.Client, userdata: Any, flags: Any, reason_code: Any, properties: Any) -> None:
@@ -410,12 +408,10 @@ def publish_state(mqtt_client: mqtt.Client, output: OutputConfig) -> None:
     publish_message(mqtt_client, topic, state, retain=True)
 
 
-
 def publish_volume_state(mqtt_client: mqtt.Client, output_name: str, volume_db: float) -> None:
     """Publish the current volume state of an output."""
     topic = f"crestroncontrol/volume_state/{output_name.replace(' ', '_')}"
     publish_message(mqtt_client, topic, str(volume_db), retain=True)
-
 
 
 def publish_discovery(mqtt_client: mqtt.Client, output: OutputConfig) -> None:
