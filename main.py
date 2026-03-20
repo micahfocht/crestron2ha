@@ -284,9 +284,11 @@ def route_source(input_name: str, output_name: str) -> bool:
         input_config.audio is not None
     )
     logic_state_success = send_tesira_logic_state(output_config, has_audio_input)
+    if not logic_state_success:
+        logger.warning(f"Failed to set amplifier logic state for '{output_name}', but routing succeeded")
     
     # Update output state
-    if crestron_success and tesira_success and logic_state_success:
+    if crestron_success and tesira_success:
         output_config.current_input = input_name
         return True
     
@@ -527,8 +529,15 @@ def publish_discovery(mqtt_client: mqtt.Client, output: OutputConfig) -> None:
         amp_discovery_topic = f"homeassistant/switch/crestroncontrol/{name_safe}_Amplifier/config"
         publish_message(mqtt_client, amp_discovery_topic, json.dumps(amp_payload), retain=True)
         mqtt_client.subscribe(f"crestroncontrol/amp/{name_safe}")
-        # Publish initial state as OFF
-        publish_amp_state(mqtt_client, name, False)
+        # Publish initial state based on current input
+        has_audio_input = (
+            output.current_input is not None and
+            output.current_input != "No Input"
+        )
+        if has_audio_input and config is not None:
+            input_cfg = config.get_input_by_name(output.current_input)
+            has_audio_input = input_cfg is not None and input_cfg.audio is not None
+        publish_amp_state(mqtt_client, name, has_audio_input)
     
     logger.info(f"Published MQTT Discovery for {name}")
     publish_state(mqtt_client, output)
