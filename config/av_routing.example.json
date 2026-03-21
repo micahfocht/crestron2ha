@@ -90,6 +90,17 @@
         "tesira_unit": "tesira_main",
         "instance_tag": "LivingRoomLevel",
         "channels": [1, 2, 3, 4, 5, 6]
+      },
+      "presets": {
+        "tesira_unit": "tesira_main",
+        "input_presets": {
+          "Apple TV": 1,
+          "Blu-ray Player": 2,
+          "Cable Box": 3,
+          "Gaming PC": 4,
+          "Background Music": 5,
+          "No Input": 6
+        }
       }
     },
     {

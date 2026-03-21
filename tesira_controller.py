@@ -18,7 +18,7 @@ except ImportError:
     PARAMIKO_AVAILABLE = False
     paramiko = None  # type: ignore
 
-from config_loader import TesiraUnit, AudioMapping, LogicStateMapping, LevelControlMapping
+from config_loader import TesiraUnit, AudioMapping, LogicStateMapping, LevelControlMapping, PresetMapping
 
 logger = logging.getLogger(__name__)
 
@@ -319,6 +319,58 @@ class TesiraController:
             logic_state.channel,
             state
         )
+    
+    def recall_preset(
+        self,
+        unit_id: str,
+        preset_number: int
+    ) -> bool:
+        """
+        Recall a device preset on a Tesira unit.
+        
+        Uses the DEVICE recallPreset TTP command for instant switching
+        instead of setting individual matrix mixer crosspoints.
+        
+        Args:
+            unit_id: Tesira unit ID
+            preset_number: Preset number to recall (1-based)
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        connection = self.get_connection(unit_id)
+        if not connection:
+            logger.error(f"Unknown Tesira unit: {unit_id}")
+            return False
+        
+        command = f"DEVICE recallPreset {preset_number}"
+        
+        success, _ = connection.send_command(command)
+        if success:
+            logger.info(f"Recalled preset {preset_number} on Tesira unit '{unit_id}'")
+        return success
+    
+    def recall_preset_from_mapping(
+        self,
+        presets: PresetMapping,
+        input_name: str
+    ) -> bool:
+        """
+        Recall a preset from a PresetMapping for a given input name.
+        
+        Args:
+            presets: Preset mapping configuration
+            input_name: Input name to look up in the preset map
+            
+        Returns:
+            True if successful, False if no preset found or recall failed
+        """
+        preset_number = presets.input_presets.get(input_name)
+        if preset_number is None:
+            logger.debug(f"No preset defined for input '{input_name}'")
+            return False
+        
+        return self.recall_preset(presets.tesira_unit, preset_number)
     
     def set_level(
         self,

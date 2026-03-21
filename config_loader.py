@@ -77,11 +77,24 @@ class LevelControlMapping:
 
 
 @dataclass
+class PresetMapping:
+    """Preset mapping for instant Tesira audio switching.
+    
+    Instead of setting individual matrix mixer crosspoints,
+    recalls a Tesira device preset for instant switching.
+    Maps input names to preset numbers on the Tesira unit.
+    """
+    tesira_unit: str
+    input_presets: dict[str, int] = field(default_factory=dict)
+
+
+@dataclass
 class InputConfig:
     """Input source configuration."""
     name: str
     crestron_id: Optional[int]  # None for audio-only inputs
     audio: Optional[AudioMapping]  # None for HDMI audio only
+    id: Optional[str] = None  # Optional unique identifier
 
 
 @dataclass
@@ -92,6 +105,8 @@ class OutputConfig:
     audio: Optional[AudioMapping]  # None for HDMI audio only
     logic_state: Optional[LogicStateMapping] = None  # Amplifier on/off control
     level_control: Optional[LevelControlMapping] = None  # Level block volume control
+    presets: Optional[PresetMapping] = None  # Preset-based audio switching
+    id: Optional[str] = None  # Optional unique identifier
     current_input: Optional[str] = None
     volume_db: float = -12.0  # Default -12dB (Tesira max is 0dB)
 
@@ -193,12 +208,23 @@ def _parse_level_control_mapping(data: Optional[dict]) -> Optional[LevelControlM
     )
 
 
+def _parse_preset_mapping(data: Optional[dict]) -> Optional[PresetMapping]:
+    """Parse preset mapping from JSON data."""
+    if data is None:
+        return None
+    return PresetMapping(
+        tesira_unit=data["tesira_unit"],
+        input_presets=data.get("input_presets", {})
+    )
+
+
 def _parse_input(data: dict) -> InputConfig:
     """Parse input configuration from JSON data."""
     return InputConfig(
         name=data["name"],
         crestron_id=data.get("crestron_id"),
-        audio=_parse_audio_mapping(data.get("audio"))
+        audio=_parse_audio_mapping(data.get("audio")),
+        id=data.get("id")
     )
 
 
@@ -209,7 +235,9 @@ def _parse_output(data: dict) -> OutputConfig:
         crestron_id=data.get("crestron_id"),
         audio=_parse_audio_mapping(data.get("audio")),
         logic_state=_parse_logic_state_mapping(data.get("logic_state")),
-        level_control=_parse_level_control_mapping(data.get("level_control"))
+        level_control=_parse_level_control_mapping(data.get("level_control")),
+        presets=_parse_preset_mapping(data.get("presets")),
+        id=data.get("id")
     )
 
 
@@ -439,6 +467,10 @@ def validate_config(config: AVRoutingConfig) -> list[str]:
             warnings.append(
                 f"Output '{out.name}' level control references unknown Tesira unit: {out.level_control.tesira_unit}"
             )
+        if out.presets and out.presets.tesira_unit not in tesira_unit_ids:
+            warnings.append(
+                f"Output '{out.name}' presets references unknown Tesira unit: {out.presets.tesira_unit}"
+            )
     
     # Check for channel label mismatches
     for inp in config.inputs:
@@ -454,5 +486,15 @@ def validate_config(config: AVRoutingConfig) -> list[str]:
                 warnings.append(
                     f"Output '{out.name}' has mismatched channel count and labels"
                 )
+    
+    # Validate preset input references
+    input_names = {inp.name for inp in config.inputs}
+    for out in config.outputs:
+        if out.presets:
+            for input_name in out.presets.input_presets:
+                if input_name not in input_names:
+                    warnings.append(
+                        f"Output '{out.name}' preset references unknown input: '{input_name}'"
+                    )
     
     return warnings
