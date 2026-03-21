@@ -179,6 +179,9 @@ def send_tesira_routing(
     """
     Send audio routing commands to Tesira.
     
+    When presets are configured for this input/output combination,
+    recalls the Tesira device preset for instant switching.
+    
     When level_control is configured on the output, crosspoints are set
     to 0 dB reference (with mixing offsets only) and volume is controlled
     via the Level block. Otherwise, crosspoint levels are set to the
@@ -196,6 +199,24 @@ def send_tesira_routing(
         logger.debug("Tesira controller not available")
         return True
     
+    # Try preset-based routing first
+    if output_config.presets is not None and input_config is not None:
+        input_name = input_config.name
+        if input_name in output_config.presets.input_presets:
+            success = tesira.recall_preset_from_mapping(
+                output_config.presets, input_name
+            )
+            if success:
+                # Set volume via level block when configured
+                if output_config.level_control is not None:
+                    tesira.set_zone_level(output_config.level_control, output_config.volume_db)
+                return True
+            logger.warning(
+                f"Preset recall failed for '{input_name}' -> '{output_config.name}', "
+                f"falling back to crosspoint routing"
+            )
+    
+    # Fall back to crosspoint-based routing
     if output_config.audio is None:
         logger.debug(f"Output '{output_config.name}' has no Tesira audio config")
         return True
