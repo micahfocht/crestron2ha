@@ -62,6 +62,21 @@ class LogicStateMapping:
 
 
 @dataclass
+class LevelControlMapping:
+    """Level block mapping for Tesira volume control.
+    
+    Uses a Tesira Level block for volume control instead of
+    adjusting matrix mixer crosspoint levels directly.
+    When configured, crosspoints are set to 0 dB (reference)
+    with mixing offsets, and actual volume is controlled via
+    the level block.
+    """
+    tesira_unit: str
+    instance_tag: str
+    channels: list[int] = field(default_factory=lambda: [1])
+
+
+@dataclass
 class InputConfig:
     """Input source configuration."""
     name: str
@@ -76,6 +91,7 @@ class OutputConfig:
     crestron_id: Optional[int]  # None for audio-only zones
     audio: Optional[AudioMapping]  # None for HDMI audio only
     logic_state: Optional[LogicStateMapping] = None  # Amplifier on/off control
+    level_control: Optional[LevelControlMapping] = None  # Level block volume control
     current_input: Optional[str] = None
     volume_db: float = -12.0  # Default -12dB (Tesira max is 0dB)
 
@@ -166,6 +182,17 @@ def _parse_logic_state_mapping(data: Optional[dict]) -> Optional[LogicStateMappi
     )
 
 
+def _parse_level_control_mapping(data: Optional[dict]) -> Optional[LevelControlMapping]:
+    """Parse level control mapping from JSON data."""
+    if data is None:
+        return None
+    return LevelControlMapping(
+        tesira_unit=data["tesira_unit"],
+        instance_tag=data["instance_tag"],
+        channels=data.get("channels", [1])
+    )
+
+
 def _parse_input(data: dict) -> InputConfig:
     """Parse input configuration from JSON data."""
     return InputConfig(
@@ -181,7 +208,8 @@ def _parse_output(data: dict) -> OutputConfig:
         name=data["name"],
         crestron_id=data.get("crestron_id"),
         audio=_parse_audio_mapping(data.get("audio")),
-        logic_state=_parse_logic_state_mapping(data.get("logic_state"))
+        logic_state=_parse_logic_state_mapping(data.get("logic_state")),
+        level_control=_parse_level_control_mapping(data.get("level_control"))
     )
 
 
@@ -406,6 +434,10 @@ def validate_config(config: AVRoutingConfig) -> list[str]:
         if out.logic_state and out.logic_state.tesira_unit not in tesira_unit_ids:
             warnings.append(
                 f"Output '{out.name}' logic state references unknown Tesira unit: {out.logic_state.tesira_unit}"
+            )
+        if out.level_control and out.level_control.tesira_unit not in tesira_unit_ids:
+            warnings.append(
+                f"Output '{out.name}' level control references unknown Tesira unit: {out.level_control.tesira_unit}"
             )
     
     # Check for channel label mismatches
