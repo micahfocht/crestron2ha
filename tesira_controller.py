@@ -18,7 +18,7 @@ except ImportError:
     PARAMIKO_AVAILABLE = False
     paramiko = None  # type: ignore
 
-from config_loader import TesiraUnit, AudioMapping
+from config_loader import TesiraUnit, AudioMapping, LogicStateMapping
 
 logger = logging.getLogger(__name__)
 
@@ -263,6 +263,62 @@ class TesiraController:
     def get_connection(self, unit_id: str) -> Optional[TesiraConnection]:
         """Get connection for a specific unit."""
         return self._connections.get(unit_id)
+    
+    def set_logic_state(
+        self,
+        unit_id: str,
+        instance_tag: str,
+        channel: int,
+        state: bool
+    ) -> bool:
+        """
+        Set the state of a Tesira logic state block.
+        
+        Used to control amplifier on/off via a logic state in the DSP.
+        
+        Args:
+            unit_id: Tesira unit ID
+            instance_tag: Logic state instance tag
+            channel: Logic state channel number (1-based)
+            state: True to turn on, False to turn off
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        connection = self.get_connection(unit_id)
+        if not connection:
+            logger.error(f"Unknown Tesira unit: {unit_id}")
+            return False
+        
+        state_str = "true" if state else "false"
+        command = f"{instance_tag} set state {channel} {state_str}"
+        
+        success, _ = connection.send_command(command)
+        if success:
+            logger.info(f"Set logic state {instance_tag} channel {channel} = {state}")
+        return success
+    
+    def set_logic_state_from_mapping(
+        self,
+        logic_state: LogicStateMapping,
+        state: bool
+    ) -> bool:
+        """
+        Set logic state from a LogicStateMapping configuration.
+        
+        Args:
+            logic_state: Logic state mapping configuration
+            state: True to turn on, False to turn off
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        return self.set_logic_state(
+            logic_state.tesira_unit,
+            logic_state.instance_tag,
+            logic_state.channel,
+            state
+        )
     
     def set_crosspoint_state(
         self,

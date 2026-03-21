@@ -54,6 +54,14 @@ class AudioMapping:
 
 
 @dataclass
+class LogicStateMapping:
+    """Logic state mapping for Tesira amplifier control."""
+    tesira_unit: str
+    instance_tag: str
+    channel: int = 1
+
+
+@dataclass
 class InputConfig:
     """Input source configuration."""
     name: str
@@ -67,6 +75,7 @@ class OutputConfig:
     name: str
     crestron_id: Optional[int]  # None for audio-only zones
     audio: Optional[AudioMapping]  # None for HDMI audio only
+    logic_state: Optional[LogicStateMapping] = None  # Amplifier on/off control
     current_input: Optional[str] = None
     volume_db: float = -12.0  # Default -12dB (Tesira max is 0dB)
 
@@ -146,6 +155,17 @@ def _parse_audio_mapping(data: Optional[dict]) -> Optional[AudioMapping]:
     )
 
 
+def _parse_logic_state_mapping(data: Optional[dict]) -> Optional[LogicStateMapping]:
+    """Parse logic state mapping from JSON data."""
+    if data is None:
+        return None
+    return LogicStateMapping(
+        tesira_unit=data["tesira_unit"],
+        instance_tag=data["instance_tag"],
+        channel=data.get("channel", 1)
+    )
+
+
 def _parse_input(data: dict) -> InputConfig:
     """Parse input configuration from JSON data."""
     return InputConfig(
@@ -160,7 +180,8 @@ def _parse_output(data: dict) -> OutputConfig:
     return OutputConfig(
         name=data["name"],
         crestron_id=data.get("crestron_id"),
-        audio=_parse_audio_mapping(data.get("audio"))
+        audio=_parse_audio_mapping(data.get("audio")),
+        logic_state=_parse_logic_state_mapping(data.get("logic_state"))
     )
 
 
@@ -381,6 +402,10 @@ def validate_config(config: AVRoutingConfig) -> list[str]:
         if out.audio and out.audio.tesira_unit not in tesira_unit_ids:
             warnings.append(
                 f"Output '{out.name}' references unknown Tesira unit: {out.audio.tesira_unit}"
+            )
+        if out.logic_state and out.logic_state.tesira_unit not in tesira_unit_ids:
+            warnings.append(
+                f"Output '{out.name}' logic state references unknown Tesira unit: {out.logic_state.tesira_unit}"
             )
     
     # Check for channel label mismatches

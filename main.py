@@ -206,6 +206,27 @@ def send_tesira_routing(
     )
 
 
+def send_tesira_logic_state(output_config: OutputConfig, state: bool) -> bool:
+    """
+    Set the Tesira logic state for an output's amplifier.
+    
+    Args:
+        output_config: Output configuration with optional logic_state mapping
+        state: True to turn amplifier on, False to turn off
+        
+    Returns:
+        True if successful or not applicable, False on error
+    """
+    if tesira is None:
+        logger.debug("Tesira controller not available")
+        return True
+    
+    if output_config.logic_state is None:
+        return True
+    
+    return tesira.set_logic_state_from_mapping(output_config.logic_state, state)
+
+
 def route_source(input_name: str, output_name: str) -> bool:
     """
     Route a source to an output (video + audio).
@@ -255,6 +276,16 @@ def route_source(input_name: str, output_name: str) -> bool:
     
     # Route audio via Tesira (if applicable)
     tesira_success = send_tesira_routing(input_config, output_config, previous_input_config)
+    
+    # Set amplifier logic state (on when audio input is active, off for "No Input")
+    has_audio_input = (
+        input_config is not None and
+        input_config.name != "No Input" and
+        input_config.audio is not None
+    )
+    logic_state_success = send_tesira_logic_state(output_config, has_audio_input)
+    if not logic_state_success:
+        logger.warning(f"Failed to set amplifier logic state for '{output_name}', but routing succeeded")
     
     # Update output state
     if crestron_success and tesira_success:
