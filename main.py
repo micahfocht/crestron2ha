@@ -199,10 +199,6 @@ def send_tesira_routing(
         logger.debug("Tesira controller not available")
         return True
     
-    if output_config.audio is None and output_config.presets is None:
-        logger.debug(f"Output '{output_config.name}' has no Tesira audio or preset config")
-        return True
-    
     # Try preset-based routing first
     if output_config.presets is not None and input_config is not None:
         input_name = input_config.name
