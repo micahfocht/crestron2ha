@@ -18,7 +18,7 @@ except ImportError:
     PARAMIKO_AVAILABLE = False
     paramiko = None  # type: ignore
 
-from config_loader import TesiraUnit, AudioMapping, LogicStateMapping
+from config_loader import TesiraUnit, AudioMapping, LogicStateMapping, LevelControlMapping
 
 logger = logging.getLogger(__name__)
 
@@ -319,6 +319,82 @@ class TesiraController:
             logic_state.channel,
             state
         )
+    
+    def set_level(
+        self,
+        unit_id: str,
+        instance_tag: str,
+        channel: int,
+        level_db: float
+    ) -> bool:
+        """
+        Set the level of a Tesira Level block channel.
+        
+        Args:
+            unit_id: Tesira unit ID
+            instance_tag: Level block instance tag
+            channel: Level block channel number (1-based)
+            level_db: Level in dB
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        connection = self.get_connection(unit_id)
+        if not connection:
+            logger.error(f"Unknown Tesira unit: {unit_id}")
+            return False
+        
+        # Clamp level to valid range
+        level_db = max(MIN_LEVEL_DB, min(MAX_LEVEL_DB, level_db))
+        
+        command = f"{instance_tag} set level {channel} {level_db:.1f}"
+        
+        success, _ = connection.send_command(command)
+        if success:
+            logger.debug(f"Set level {instance_tag} channel {channel} = {level_db:.1f}dB")
+        return success
+    
+    def set_zone_level(
+        self,
+        level_control: LevelControlMapping,
+        level_db: float
+    ) -> bool:
+        """
+        Set volume for a zone using a Tesira Level block.
+        
+        Sets all channels in the level block to the same level.
+        Uses batch commands for synchronized updates.
+        
+        Args:
+            level_control: Level control mapping configuration
+            level_db: Level in dB
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        connection = self.get_connection(level_control.tesira_unit)
+        if not connection:
+            logger.error(f"Unknown Tesira unit: {level_control.tesira_unit}")
+            return False
+        
+        # Clamp level to valid range
+        level_db = max(MIN_LEVEL_DB, min(MAX_LEVEL_DB, level_db))
+        
+        commands: list[str] = []
+        for channel in level_control.channels:
+            commands.append(
+                f"{level_control.instance_tag} set level {channel} {level_db:.1f}"
+            )
+        
+        success = connection.send_commands_batch(commands)
+        
+        if success:
+            logger.info(
+                f"Set zone level to {level_db:.1f}dB on {len(level_control.channels)} "
+                f"channels via {level_control.instance_tag}"
+            )
+        
+        return success
     
     def set_crosspoint_state(
         self,

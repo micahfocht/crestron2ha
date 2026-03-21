@@ -179,6 +179,11 @@ def send_tesira_routing(
     """
     Send audio routing commands to Tesira.
     
+    When level_control is configured on the output, crosspoints are set
+    to 0 dB reference (with mixing offsets only) and volume is controlled
+    via the Level block. Otherwise, crosspoint levels are set to the
+    output's volume_db directly.
+    
     Args:
         input_config: Input configuration (None to clear routing)
         output_config: Output configuration
@@ -198,12 +203,25 @@ def send_tesira_routing(
     input_audio = input_config.audio if input_config else None
     previous_audio = previous_input_config.audio if previous_input_config else None
     
-    return tesira.route_audio(
+    # When level_control is configured, set crosspoints to 0 dB reference
+    # and use the level block for actual volume control
+    if output_config.level_control is not None:
+        crosspoint_level = 0.0
+    else:
+        crosspoint_level = output_config.volume_db
+    
+    success = tesira.route_audio(
         input_audio,
         output_config.audio,
-        output_config.volume_db,
+        crosspoint_level,
         previous_audio
     )
+    
+    # Set initial volume via level block when configured
+    if success and output_config.level_control is not None:
+        tesira.set_zone_level(output_config.level_control, output_config.volume_db)
+    
+    return success
 
 
 def send_tesira_logic_state(output_config: OutputConfig, state: bool) -> bool:
@@ -299,6 +317,9 @@ def set_zone_volume(output_name: str, volume_db: float) -> bool:
     """
     Set the volume for a zone.
     
+    Uses Level block when level_control is configured on the output,
+    otherwise falls back to adjusting matrix mixer crosspoint levels.
+    
     Args:
         output_name: Output/zone name
         volume_db: Volume in dB
@@ -318,6 +339,14 @@ def set_zone_volume(output_name: str, volume_db: float) -> bool:
         logger.debug(f"Output '{output_name}' has no Tesira audio")
         return True
     
+    # Update stored volume
+    output_config.volume_db = volume_db
+    
+    # Use level block when configured
+    if output_config.level_control is not None:
+        return tesira.set_zone_level(output_config.level_control, volume_db)
+    
+    # Fall back to crosspoint level control
     # Get current input for this output
     input_config = None
     if output_config.current_input:
@@ -327,8 +356,6 @@ def set_zone_volume(output_name: str, volume_db: float) -> bool:
         logger.debug(f"No audio input routed to '{output_name}'")
         return True
     
-    # Update stored volume and send to Tesira
-    output_config.volume_db = volume_db
     return tesira.set_zone_volume(input_config.audio, output_config.audio, volume_db)
 
 
