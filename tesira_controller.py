@@ -448,6 +448,78 @@ class TesiraController:
         
         return success
     
+    def set_mute(
+        self,
+        unit_id: str,
+        instance_tag: str,
+        channel: int,
+        muted: bool
+    ) -> bool:
+        """
+        Set the mute state of a Tesira Level block channel.
+        
+        Args:
+            unit_id: Tesira unit ID
+            instance_tag: Level block instance tag
+            channel: Level block channel number (1-based)
+            muted: True to mute, False to unmute
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        connection = self.get_connection(unit_id)
+        if not connection:
+            logger.error(f"Unknown Tesira unit: {unit_id}")
+            return False
+        
+        mute_str = "true" if muted else "false"
+        command = f"{instance_tag} set mute {channel} {mute_str}"
+        
+        success, _ = connection.send_command(command)
+        if success:
+            logger.debug(f"Set mute {instance_tag} channel {channel} = {muted}")
+        return success
+    
+    def set_zone_mute(
+        self,
+        level_control: LevelControlMapping,
+        muted: bool
+    ) -> bool:
+        """
+        Set mute for a zone using a Tesira Level block.
+        
+        Sets all channels in the level block to the same mute state.
+        Uses batch commands for synchronized updates.
+        
+        Args:
+            level_control: Level control mapping configuration
+            muted: True to mute, False to unmute
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        connection = self.get_connection(level_control.tesira_unit)
+        if not connection:
+            logger.error(f"Unknown Tesira unit: {level_control.tesira_unit}")
+            return False
+        
+        mute_str = "true" if muted else "false"
+        commands: list[str] = []
+        for channel in level_control.channels:
+            commands.append(
+                f"{level_control.instance_tag} set mute {channel} {mute_str}"
+            )
+        
+        success = connection.send_commands_batch(commands)
+        
+        if success:
+            logger.info(
+                f"Set zone mute to {muted} on {len(level_control.channels)} "
+                f"channels via {level_control.instance_tag}"
+            )
+        
+        return success
+    
     def set_crosspoint_state(
         self,
         unit_id: str,
