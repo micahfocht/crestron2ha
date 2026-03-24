@@ -107,6 +107,7 @@ class OutputConfig:
     presets: Optional[PresetMapping] = None  # Preset-based audio switching
     current_input: Optional[str] = None
     volume_db: float = -12.0  # Default -12dB (Tesira max is 0dB)
+    muted: bool = False  # Mute state for level control block
 
 
 @dataclass

@@ -383,6 +383,37 @@ def set_zone_volume(output_name: str, volume_db: float) -> bool:
     return success
 
 
+def set_zone_mute(output_name: str, muted: bool) -> bool:
+    """
+    Set the mute state for a zone.
+    
+    Uses the Level block mute when level_control is configured on the output.
+    
+    Args:
+        output_name: Output/zone name
+        muted: True to mute, False to unmute
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    if config is None or tesira is None:
+        return False
+    
+    output_config = config.get_output_by_name(output_name)
+    if output_config is None:
+        logger.error(f"Output '{output_name}' not found")
+        return False
+    
+    if output_config.level_control is None:
+        logger.debug(f"Output '{output_name}' has no level control for mute")
+        return True
+    
+    success = tesira.set_zone_mute(output_config.level_control, muted)
+    if success:
+        output_config.muted = muted
+    return success
+
+
 # MQTT Callbacks
 def on_connect(mqtt_client: mqtt.Client, userdata: Any, flags: Any, reason_code: Any, properties: Any) -> None:
     """Handle MQTT connection."""
@@ -441,6 +472,15 @@ def on_message(mqtt_client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -
                 logger.error(f"Failed to set volume for {output_name}")
         except ValueError:
             logger.error(f"Invalid volume value: {payload}")
+    
+    # Handle mute commands
+    elif topic.startswith('crestroncontrol/mute/'):
+        output_name = topic.replace('crestroncontrol/mute/', '').replace('_', ' ')
+        muted = payload.upper() == "ON"
+        if set_zone_mute(output_name, muted):
+            publish_mute_state(mqtt_client, output_name, muted)
+        else:
+            logger.error(f"Failed to set mute for {output_name}")
 
 
 def on_disconnect(mqtt_client: mqtt.Client, userdata: Any, flags: Any, reason_code: Any, properties: Any) -> None:
@@ -463,6 +503,13 @@ def publish_volume_state(mqtt_client: mqtt.Client, output_name: str, volume_db: 
     """Publish the current volume state of an output."""
     topic = f"crestroncontrol/volume_state/{output_name.replace(' ', '_')}"
     publish_message(mqtt_client, topic, str(volume_db), retain=True)
+
+
+def publish_mute_state(mqtt_client: mqtt.Client, output_name: str, muted: bool) -> None:
+    """Publish the current mute state of an output."""
+    topic = f"crestroncontrol/mute_state/{output_name.replace(' ', '_')}"
+    state = "ON" if muted else "OFF"
+    publish_message(mqtt_client, topic, state, retain=True)
 
 
 def publish_discovery(mqtt_client: mqtt.Client, output: OutputConfig) -> None:
@@ -525,6 +572,31 @@ def publish_discovery(mqtt_client: mqtt.Client, output: OutputConfig) -> None:
         publish_message(mqtt_client, volume_discovery_topic, json.dumps(volume_payload), retain=True)
         mqtt_client.subscribe(f"crestroncontrol/volume/{name_safe}")
         publish_volume_state(mqtt_client, name, output.volume_db)
+    
+    # Mute switch entity (if output has level_control configured)
+    if output.level_control is not None:
+        mute_payload = {
+            "name": f"{name} Mute",
+            "unique_id": f"AVControl_{name_safe}_Mute",
+            "command_topic": f"crestroncontrol/mute/{name_safe}",
+            "state_topic": f"crestroncontrol/mute_state/{name_safe}",
+            "payload_on": "ON",
+            "payload_off": "OFF",
+            "availability_topic": "crestroncontrol/availability",
+            "payload_available": "online",
+            "payload_not_available": "offline",
+            "device": {
+                "manufacturer": "Crestron/Biamp",
+                "model": "AV Matrix System",
+                "name": "AV Control",
+                "identifiers": ["av_control_system"]
+            },
+        }
+        
+        mute_discovery_topic = f"homeassistant/switch/crestroncontrol/{name_safe}_Mute/config"
+        publish_message(mqtt_client, mute_discovery_topic, json.dumps(mute_payload), retain=True)
+        mqtt_client.subscribe(f"crestroncontrol/mute/{name_safe}")
+        publish_mute_state(mqtt_client, name, output.muted)
     
     logger.info(f"Published MQTT Discovery for {name}")
     publish_state(mqtt_client, output)
