@@ -1,4 +1,6 @@
-FROM --platform=$BUILDPLATFORM python:3.13.3-slim
+# On an ARM development machine, build the AMD64 deployment image with:
+# docker build --platform linux/amd64 -t crestron2ha:latest .
+FROM python:3.13.3-slim
 
 LABEL Maintainer="micahfocht"
 
@@ -13,8 +15,9 @@ RUN apt-get update && \
     apt-get autoremove -y && \
     rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies without cache
-RUN pip install --no-cache-dir paho-mqtt exscript paramiko
+# Install pinned Python dependencies without cache
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Create non-root user and app directory
 RUN useradd -m -u 1000 appuser && \

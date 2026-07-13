@@ -7,6 +7,9 @@ It listens for commands to change video/audio routing and zone volumes.
 """
 
 from Exscript.protocols import telnetlib
+from dataclasses import dataclass
+import queue
+import threading
 import time
 import paho.mqtt.client as mqtt
 from paho.mqtt.client import CallbackAPIVersion  # type: ignore
@@ -31,6 +34,8 @@ MQTT_KEEPALIVE = 60
 AVAILABILITY_CHECK_INTERVAL = 10
 MAX_COMMAND_RETRIES = 3
 RETRY_DELAY_BASE = 1.0
+COMMAND_QUEUE_SIZE = 100
+COMMAND_WORKER_SHUTDOWN_TIMEOUT = 5.0
 
 # Configure logging
 logging.basicConfig(
@@ -49,6 +54,7 @@ else:
 config: Optional[AVRoutingConfig] = None
 tesira: Optional[TesiraController] = None
 client: Optional[mqtt.Client] = None
+command_worker: Optional['DeviceCommandWorker'] = None
 
 
 @contextmanager
@@ -414,6 +420,124 @@ def set_zone_mute(output_name: str, muted: bool) -> bool:
     return success
 
 
+@dataclass
+class DeviceCommand:
+    """A device command accepted from MQTT."""
+
+    topic: str
+    payload: str
+
+
+class DeviceCommandWorker:
+    """Process blocking device I/O without blocking Paho's network loop."""
+
+    def __init__(self, mqtt_client: mqtt.Client, max_queue_size: int = COMMAND_QUEUE_SIZE):
+        self._mqtt_client = mqtt_client
+        self._commands: queue.Queue[DeviceCommand] = queue.Queue(maxsize=max_queue_size)
+        self._pending_volumes: dict[str, DeviceCommand] = {}
+        self._pending_lock = threading.Lock()
+        self._stop_event = threading.Event()
+        self._thread = threading.Thread(
+            target=self._run,
+            name="device-command-worker",
+            daemon=True,
+        )
+
+    def start(self) -> None:
+        """Start processing queued commands."""
+        self._thread.start()
+
+    def submit(self, topic: str, payload: str) -> bool:
+        """Queue a command, coalescing pending volume updates by output."""
+        if self._stop_event.is_set():
+            return False
+
+        if topic.startswith("crestroncontrol/volume/"):
+            with self._pending_lock:
+                pending = self._pending_volumes.get(topic)
+                if pending is not None:
+                    pending.payload = payload
+                    return True
+
+                command = DeviceCommand(topic, payload)
+                try:
+                    self._commands.put_nowait(command)
+                except queue.Full:
+                    return False
+                self._pending_volumes[topic] = command
+                return True
+
+        try:
+            self._commands.put_nowait(DeviceCommand(topic, payload))
+            return True
+        except queue.Full:
+            return False
+
+    def _run(self) -> None:
+        """Worker thread entry point."""
+        while not self._stop_event.is_set() or not self._commands.empty():
+            try:
+                command = self._commands.get(timeout=0.2)
+            except queue.Empty:
+                continue
+
+            try:
+                if command.topic.startswith("crestroncontrol/volume/"):
+                    with self._pending_lock:
+                        if self._pending_volumes.get(command.topic) is command:
+                            self._pending_volumes.pop(command.topic, None)
+                        payload = command.payload
+                else:
+                    payload = command.payload
+
+                process_mqtt_command(self._mqtt_client, command.topic, payload)
+            except Exception:
+                logger.exception("Unhandled error while processing device command")
+            finally:
+                self._commands.task_done()
+
+    def stop(self, timeout: float = COMMAND_WORKER_SHUTDOWN_TIMEOUT) -> None:
+        """Stop accepting work and allow queued commands to finish briefly."""
+        self._stop_event.set()
+        self._thread.join(timeout=timeout)
+        if self._thread.is_alive():
+            logger.warning("Device command worker did not stop within %.1fs", timeout)
+
+
+def process_mqtt_command(mqtt_client: mqtt.Client, topic: str, payload: str) -> None:
+    """Execute one decoded MQTT command on the device worker thread."""
+    if topic.startswith('crestroncontrol/cmd/'):
+        output_name = topic.replace('crestroncontrol/cmd/', '').replace('_', ' ')
+
+        if route_source(payload, output_name):
+            output = config.get_output_by_name(output_name) if config else None
+            if output:
+                publish_state(mqtt_client, output)
+        else:
+            logger.error(f"Failed to route: {payload} -> {output_name}")
+
+    elif topic.startswith('crestroncontrol/volume/'):
+        output_name = topic.replace('crestroncontrol/volume/', '').replace('_', ' ')
+        try:
+            volume_db = float(payload)
+            if set_zone_volume(output_name, volume_db):
+                publish_volume_state(mqtt_client, output_name, volume_db)
+            else:
+                logger.error(f"Failed to set volume for {output_name}")
+        except ValueError:
+            logger.error(f"Invalid volume value: {payload}")
+
+    elif topic.startswith('crestroncontrol/mute/'):
+        output_name = topic.replace('crestroncontrol/mute/', '').replace('_', ' ')
+        muted = payload.upper() == "ON"
+        if set_zone_mute(output_name, muted):
+            publish_mute_state(mqtt_client, output_name, muted)
+        else:
+            logger.error(f"Failed to set mute for {output_name}")
+    else:
+        logger.warning(f"Unexpected command topic: {topic}")
+
+
 # MQTT Callbacks
 def on_connect(mqtt_client: mqtt.Client, userdata: Any, flags: Any, reason_code: Any, properties: Any) -> None:
     """Handle MQTT connection."""
@@ -438,7 +562,7 @@ def on_connect(mqtt_client: mqtt.Client, userdata: Any, flags: Any, reason_code:
 
 
 def on_message(mqtt_client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> None:
-    """Handle incoming MQTT messages."""
+    """Decode and enqueue incoming MQTT messages without blocking Paho."""
     publish_message(mqtt_client, "crestroncontrol/availability", "online")
     
     topic = msg.topic
@@ -449,38 +573,9 @@ def on_message(mqtt_client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -
         return
     
     logger.info(f"Received `{payload}` from `{topic}` topic")
-    
-    # Handle source selection commands
-    if topic.startswith('crestroncontrol/cmd/'):
-        output_name = topic.replace('crestroncontrol/cmd/', '').replace('_', ' ')
-        
-        if route_source(payload, output_name):
-            output = config.get_output_by_name(output_name) if config else None
-            if output:
-                publish_state(mqtt_client, output)
-        else:
-            logger.error(f"Failed to route: {payload} -> {output_name}")
-    
-    # Handle volume commands
-    elif topic.startswith('crestroncontrol/volume/'):
-        output_name = topic.replace('crestroncontrol/volume/', '').replace('_', ' ')
-        try:
-            volume_db = float(payload)
-            if set_zone_volume(output_name, volume_db):
-                publish_volume_state(mqtt_client, output_name, volume_db)
-            else:
-                logger.error(f"Failed to set volume for {output_name}")
-        except ValueError:
-            logger.error(f"Invalid volume value: {payload}")
-    
-    # Handle mute commands
-    elif topic.startswith('crestroncontrol/mute/'):
-        output_name = topic.replace('crestroncontrol/mute/', '').replace('_', ' ')
-        muted = payload.upper() == "ON"
-        if set_zone_mute(output_name, muted):
-            publish_mute_state(mqtt_client, output_name, muted)
-        else:
-            logger.error(f"Failed to set mute for {output_name}")
+
+    if command_worker is None or not command_worker.submit(topic, payload):
+        logger.error("Device command queue is full or stopping; dropped `%s`", topic)
 
 
 def on_disconnect(mqtt_client: mqtt.Client, userdata: Any, flags: Any, reason_code: Any, properties: Any) -> None:
@@ -710,7 +805,7 @@ def generate_initial_config(crestron_host: str, crestron_port: int) -> None:
 
 def main() -> None:
     """Main entry point."""
-    global config, tesira, client
+    global config, tesira, client, command_worker
     
     # Try to load configuration
     config = load_config(CONFIG_PATH)
@@ -753,6 +848,8 @@ def main() -> None:
     client.on_connect = on_connect
     client.on_message = on_message
     client.on_disconnect = on_disconnect
+    client.max_queued_messages_set(COMMAND_QUEUE_SIZE)
+    client.reconnect_delay_set(min_delay=1, max_delay=30)
     
     # Set MQTT credentials if provided
     if config.mqtt.username and config.mqtt.password:
@@ -775,6 +872,11 @@ def main() -> None:
         if not crestron_inputs or not crestron_outputs:
             logger.error("Failed to connect to Crestron switcher")
             raise RuntimeError("Crestron initialization failed")
+
+        # Device operations can block on network timeouts, so keep them off
+        # Paho's single network-loop thread.
+        command_worker = DeviceCommandWorker(client)
+        command_worker.start()
         
         # Start MQTT loop
         client.loop_start()
@@ -791,6 +893,9 @@ def main() -> None:
         logger.error(f"Fatal error: {e}", exc_info=True)
     finally:
         logger.info("Cleaning up...")
+
+        if command_worker:
+            command_worker.stop()
         
         if client:
             publish_message(client, "crestroncontrol/availability", "offline")

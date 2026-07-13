@@ -1,13 +1,13 @@
 # Crestron/Tesira AV Control Bridge Dependencies
 
 # MQTT client for Home Assistant integration
-paho-mqtt>=2.0.0
+paho-mqtt==2.1.0
 
 # Telnet library for Crestron communication
-exscript>=2.6.0
+exscript==2.6.32
 
 # SSH client for Tesira TTP communication
-paramiko>=3.0.0
+paramiko==3.5.1
 
 # Environment variable loading (optional, for development)
-python-dotenv>=1.0.0
+python-dotenv==1.2.1

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Tesira Forte DSP controller module.
 
@@ -6,6 +8,8 @@ for matrix mixer crosspoint control and zone volume management.
 """
 
 import logging
+import re
+import threading
 import time
 from typing import Optional
 from dataclasses import dataclass
@@ -24,9 +28,19 @@ logger = logging.getLogger(__name__)
 
 # Constants
 SSH_TIMEOUT = 10
-COMMAND_DELAY = 0.01  # Reduced delay between commands for faster switching
+SSH_KEEPALIVE_INTERVAL = 30
+COMMAND_RESPONSE_TIMEOUT = 5.0
+RESPONSE_POLL_INTERVAL = 0.01
 MAX_RETRIES = 3
 RETRY_DELAY = 1.0
+
+# A response is complete only after its line ending arrives. Matching a bare
+# "+OK" token could leave the rest of that response buffered for the next
+# transaction when an SSH packet splits the line.
+_TTP_RESULT_PATTERN = re.compile(
+    r"^\s*(?:\+OK|-ERR)\b[^\r\n]*(?:\r\n|[\r\n])",
+    re.MULTILINE,
+)
 
 # Default and limits for crosspoint levels
 DEFAULT_LEVEL_DB = -12.0  # Default crosspoint level
@@ -69,6 +83,9 @@ class TesiraConnection:
         self.unit = unit
         self._client: Optional[paramiko.SSHClient] = None
         self._channel: Optional[paramiko.Channel] = None
+        # Paramiko channels are not safe for concurrent command/response
+        # exchanges. Keep every TTP transaction atomic.
+        self._command_lock = threading.RLock()
     
     def connect(self) -> bool:
         """
@@ -80,6 +97,10 @@ class TesiraConnection:
         if not PARAMIKO_AVAILABLE:
             logger.error("paramiko not installed - cannot connect to Tesira")
             return False
+
+        # Do not leak a channel or transport when replacing a stale session.
+        if self._client is not None or self._channel is not None:
+            self.disconnect()
         
         try:
             self._client = paramiko.SSHClient()
@@ -94,15 +115,20 @@ class TesiraConnection:
                 look_for_keys=False,
                 allow_agent=False
             )
+
+            transport = self._client.get_transport()
+            if transport is None:
+                raise ConnectionError("SSH transport was not created")
+            transport.set_keepalive(SSH_KEEPALIVE_INTERVAL)
             
             # Open interactive shell for TTP commands
             self._channel = self._client.invoke_shell()
             self._channel.settimeout(SSH_TIMEOUT)
             
-            # Read initial prompt/banner
+            # Read the complete initial prompt/banner so it cannot be mistaken
+            # for the first command response.
             time.sleep(0.5)
-            if self._channel.recv_ready():
-                self._channel.recv(4096)
+            self._drain_available()
             
             logger.info(f"Connected to Tesira unit '{self.unit.id}'")
             return True
@@ -134,9 +160,103 @@ class TesiraConnection:
             return False
         try:
             transport = self._client.get_transport()
-            return transport is not None and transport.is_active()
+            return bool(
+                transport is not None
+                and transport.is_active()
+                and transport.is_authenticated()
+                and not self._channel.closed
+                and not self._channel.eof_received
+            )
         except Exception:
             return False
+
+    def _drain_available(self) -> str:
+        """Drain bytes that are already buffered on the SSH channel."""
+        if self._channel is None:
+            return ""
+
+        chunks: list[str] = []
+        while self._channel.recv_ready():
+            chunk = self._channel.recv(65535)
+            if not chunk:
+                raise ConnectionError("Tesira SSH channel closed while reading")
+            chunks.append(chunk.decode("utf-8", errors="replace"))
+        return "".join(chunks)
+
+    def _read_responses(self, expected_count: int) -> str:
+        """Read until each submitted TTP command has returned OK or ERR."""
+        if self._channel is None:
+            raise ConnectionError("Tesira SSH channel is not open")
+
+        deadline = time.monotonic() + COMMAND_RESPONSE_TIMEOUT
+        chunks: list[str] = []
+
+        while True:
+            if self._channel.recv_ready():
+                chunk = self._channel.recv(65535)
+                if not chunk:
+                    raise ConnectionError("Tesira SSH channel closed while reading")
+                chunks.append(chunk.decode("utf-8", errors="replace"))
+
+                response = "".join(chunks)
+                if len(_TTP_RESULT_PATTERN.findall(response)) >= expected_count:
+                    # Capture any response bytes that arrived in the same burst.
+                    response += self._drain_available()
+                    return response
+
+            if self._channel.closed or self._channel.eof_received:
+                raise ConnectionError("Tesira SSH channel closed before responding")
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                response = "".join(chunks)
+                received_count = len(_TTP_RESULT_PATTERN.findall(response))
+                raise TimeoutError(
+                    f"Timed out waiting for Tesira responses "
+                    f"({received_count}/{expected_count} received)"
+                )
+
+            time.sleep(min(RESPONSE_POLL_INTERVAL, remaining))
+
+    def _send_commands(self, commands: list[str]) -> tuple[bool, str]:
+        """Send one transaction, reconnecting once after transport failures."""
+        if not commands:
+            return True, ""
+
+        with self._command_lock:
+            for attempt in range(2):
+                if not self.is_connected() and not self.connect():
+                    if attempt == 0:
+                        continue
+                    return False, "Connection failed"
+
+                try:
+                    batch = "\n".join(commands) + "\n"
+                    self._channel.sendall(batch.encode())  # type: ignore[union-attr]
+                    response = self._read_responses(len(commands))
+
+                    if "-ERR" in response:
+                        logger.warning(
+                            "Tesira rejected one or more commands: %s",
+                            response.strip(),
+                        )
+                        return False, response
+
+                    return True, response
+                except Exception as exc:
+                    logger.warning(
+                        "Tesira transaction failed on attempt %d/2: %s",
+                        attempt + 1,
+                        exc,
+                    )
+                    # A response timeout leaves command boundaries unknown. A
+                    # fresh session is the only safe way to resynchronize.
+                    self.disconnect()
+                    if attempt == 0:
+                        continue
+                    return False, str(exc)
+
+        return False, "Tesira transaction failed"
     
     def send_command(self, command: str, wait_for_response: bool = True) -> tuple[bool, str]:
         """
@@ -144,45 +264,15 @@ class TesiraConnection:
         
         Args:
             command: TTP command string (without newline)
-            wait_for_response: If False, don't wait for response (faster batching)
+            wait_for_response: If False, consume but do not return the response
             
         Returns:
             Tuple of (success, response)
         """
-        if not self.is_connected():
-            if not self.connect():
-                return False, "Connection failed"
-        
-        try:
-            # Send command
-            cmd = f"{command}\n"
-            self._channel.send(cmd.encode())  # type: ignore
-            
-            if not wait_for_response:
-                return True, ""
-            
-            # Wait for response
-            time.sleep(COMMAND_DELAY)
-            
-            response = ""
-            while self._channel.recv_ready():  # type: ignore
-                chunk = self._channel.recv(4096).decode('utf-8', errors='replace')  # type: ignore
-                response += chunk
-                time.sleep(0.005)
-            
-            # Check for error response
-            if "+OK" in response:
-                return True, response
-            elif "-ERR" in response:
-                logger.warning(f"Tesira command error: {command} -> {response.strip()}")
-                return False, response
-            else:
-                # No explicit OK/ERR, assume success
-                return True, response
-                
-        except Exception as e:
-            logger.error(f"Error sending command to Tesira: {e}")
-            return False, str(e)
+        # Always consume the response, even when the caller does not need its
+        # contents. Leaving it buffered would desynchronize the next command.
+        success, response = self._send_commands([command])
+        return success, response if wait_for_response else ""
     
     def send_commands_batch(self, commands: list[str]) -> bool:
         """
@@ -197,29 +287,10 @@ class TesiraConnection:
         Returns:
             True if all commands sent successfully
         """
-        if not commands:
-            return True
-            
-        if not self.is_connected():
-            if not self.connect():
-                return False
-        
-        try:
-            # Concatenate all commands into a single buffer
-            # This sends them in one TCP packet for synchronized execution
-            batch = "\n".join(commands) + "\n"
-            self._channel.sendall(batch.encode())  # type: ignore
-            
-            # Small delay then drain any responses
-            time.sleep(COMMAND_DELAY)
-            while self._channel.recv_ready():  # type: ignore
-                self._channel.recv(4096)  # type: ignore
-            
-            logger.debug(f"Sent {len(commands)} commands in single batch")
-            return True
-        except Exception as e:
-            logger.error(f"Error sending batch commands to Tesira: {e}")
-            return False
+        success, _ = self._send_commands(commands)
+        if success:
+            logger.debug(f"Sent and acknowledged {len(commands)} batch commands")
+        return success
 
 
 class TesiraController:
